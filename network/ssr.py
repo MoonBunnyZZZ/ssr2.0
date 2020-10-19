@@ -33,31 +33,32 @@ class SSR(nn.Module):
         delta1, eta1, p1 = self.stage1(y1[0], y2[0])
         delta2, eta2, p2 = self.stage2(y1[1], y2[1])
         delta3, eta3, p3 = self.stage3(y1[2], y2[2])
-        print(delta1.size(), eta1.size(), p1.size())
-        print(delta2.size(), eta2.size(), p2.size())
-        print(delta3.size(), eta3.size(), p3.size())
+        # print(delta1.size(), eta1.size(), p1.size())
+        # print(delta2.size(), eta2.size(), p2.size())
+        # print(delta3.size(), eta3.size(), p3.size())
 
         s1 = (3 * (1 + delta1))
         s2 = (3 * (1 + delta2))
         s3 = (3 * (1 + delta3))
-        print(s1, s2, s3)
+        # print(s1, s2, s3)
 
-        a = torch.sum(torch.mul(input=torch.add(input=torch.Tensor([[0, 1, 2]]),
+        a = torch.sum(torch.mul(input=torch.add(input=torch.Tensor([[0, 1, 2]]).cuda(),
                                                 other=eta3),
                                 other=p3), axis=1, keepdims=True)
-        b = torch.sum(torch.mul(input=torch.add(input=torch.Tensor([[0, 1, 2]]),
+        b = torch.sum(torch.mul(input=torch.add(input=torch.Tensor([[0, 1, 2]]).cuda(),
                                                 other=eta2),
                                 other=p2), axis=1, keepdims=True)
-        c = torch.sum(torch.mul(input=torch.add(input=torch.Tensor([[0, 1, 2]]),
+        c = torch.sum(torch.mul(input=torch.add(input=torch.Tensor([[0, 1, 2]]).cuda(),
                                                 other=eta1),
                                 other=p1), axis=1, keepdims=True)
-        print(a, '\n', b, '\n', c)
+        # print(a, '\n', b, '\n', c)
         age = 101 * (a / s3 + b / s2 / s3 + c / s1 / s2 / s3)
-        print('age', age)
+        # print('age', age)
+        return age
 
 
 if __name__ == '__main__':
     net = SSR()
-    dummy = torch.rand((2, 3, 112, 112))
+    dummy = torch.rand((2, 3, 108, 108))
     with torch.no_grad():
         output = net(dummy)

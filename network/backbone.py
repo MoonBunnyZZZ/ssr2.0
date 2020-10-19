@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torchvision.models.resnet
 
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
@@ -29,7 +30,7 @@ class BasicBlock(nn.Module):
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = norm_layer(planes)
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = nn.LeakyReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
@@ -79,6 +80,12 @@ class ResNet(nn.Module):
         self.stages = nn.ModuleList([ResidualStage(**cfg['stage2']),
                                      ResidualStage(**cfg['stage3']),
                                      ResidualStage(**cfg['stage4'])])
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         x = self.stem(x)

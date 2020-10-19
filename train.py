@@ -14,8 +14,44 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 def cli():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--threads-num', type=int)
+    parser.add_argument('--gpu-id', type=int)
+    parser.add_argument('--gpus-num', type=int)
+    parser.add_argument('--db-dir', type=str)
+    parser.add_argument('--print-freq', type=int)
+    parser.add_argument('--lr', type=float)
+    parser.add_argument('--warmup-num', type=int)
+    parser.add_argument('--lr-decay-milestone', type=str)
+    parser.add_argument('--max-epoch', type=int)
+    parser.add_argument('--save-dir', type=str)
+
     arguments = parser.parse_args()
     return arguments
+
+
+def lr_scheduler(args):
+    warmup_num = args.warmup_num
+    lr_decay_milestone = list(map(lambda x: int(x), args.lr_decay_milestone.split(',')))
+
+    def scheduler_func(epoch):
+        ratio = 1.0
+        if epoch < warmup_num:
+            return (epoch+1) / warmup_num
+        else:
+            for step in lr_decay_milestone:
+                if epoch > step:
+                    ratio *= 0.1
+            return ratio
+
+    return scheduler_func
+
+
+def save_checkpoint(net_state, optimizer_state, save_dir, epoch, is_best=False):
+    torch.save(net_state, '{}/net_epoch{}.pth'.format(save_dir, epoch))
+    torch.save(optimizer_state, '{}/optimizer_epoch{}.pth'.format(save_dir, epoch))
+    if is_best:
+        torch.save({'net_state': net_state, 'epoch': epoch}, '{}/best.pth'.format(save_dir))
 
 
 def get_dali_iterator(args):
@@ -30,14 +66,13 @@ def get_dali_iterator(args):
     return train_loader, val_loader
 
 
-def get_net(args):
+def get_net():
     net = SSR()
     net = net.cuda()
     return net
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
-    global global_step
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -46,19 +81,18 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
     end = time.time()
 
-    for i, data in enumerate(train_loader):
-        input = data[0]["data"]
-        target = data[0]["label"].cuda()
+    for i, batch in enumerate(train_loader):
+        data = batch[0]["data"]
+        target = batch[0]["label"].contiguous().view(data.size(0), 1)
+        target = target.cuda()
 
         # measure data loading time
         data_time.update(time.time() - end)
 
         # compute output
-        output = model(input)
+        output = model(data)
         loss = criterion(output, target)
-        # print(loss)
-
-        losses.update(to_python_float(loss.clone().detach()), input.size(0))
+        losses.update(to_python_float(loss), data.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -70,19 +104,16 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         batch_time.update(time.time() - end)
 
         end = time.time()
-        global_step += 1
-        if args.local_rank == 0 and i % args.print_freq == 0 and i > 1:
-            print('{time} Epoch: [{0}][{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(epoch, i,
-                                                                  batch_time=batch_time, data_time=data_time,
-                                                                  loss=losses, time=time.strftime("%m-%d %H:%M:%S",
-                                                                                                  time.localtime())))
+        if i % args.print_freq == 0 and i > 1:
+            print('{time} Epoch:[{0}] Step:[{1}] Time {2:.3f} '
+                  'Data {3:.3f} Loss {4:.4f}'.format(epoch, i, batch_time.period_avg(), data_time.period_avg(),
+                                                     losses.period_avg(), time=time.strftime("%m-%d %H:%M:%S",
+                                                                                             time.localtime())))
+    print('Epoch:[{0}] Train Loss {1:.4f} Now LR {2:6f}'.format(epoch, losses.avg(), optimizer.param_groups[0]["lr"]))
     return batch_time.avg
 
 
-def validate(val_loader, model, criterion):
+def validate(val_loader, model, criterion, epoch):
     batch_time = AverageMeter()
     losses = AverageMeter()
 
@@ -91,56 +122,44 @@ def validate(val_loader, model, criterion):
 
     end = time.time()
 
-    for i, data in enumerate(val_loader):
-        input = data[0]["data"]
-        target = data[0]["label"].squeeze().cuda().long()
-        val_loader_len = int(val_loader._size / args.batch_size)
-
+    for i, batch in enumerate(val_loader):
+        data = batch[0]["data"]
+        target = batch[0]["label"].view(data.size(0), 1)
         target = target.cuda(non_blocking=True)
 
         # compute output
         with torch.no_grad():
-            output = model(input)
+            output = model(data)
             loss = criterion(output, target)
 
-        losses.update(to_python_float(loss.clone()), input.size(0))
+        losses.update(to_python_float(loss), data.size(0))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if args.local_rank == 0 and i % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Speed {2:.3f} ({3:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(i, val_loader_len,
-                                                                  args.batch_size / batch_time.val,
-                                                                  args.batch_size / batch_time.avg,
-                                                                  batch_time=batch_time, loss=losses))
+    print('Epoch [{}] Test Loss {:.4f}'.format(epoch, losses.avg()))
 
-    return losses.avg
+    return losses.avg()
 
 
 def main():
+    best_prec = 30.0
     args = cli()
+    print(args)
     train_loader, val_loader = get_dali_iterator(args)
-    net = get_net(args)
+    net = get_net()
     criterion = torch.nn.L1Loss().cuda()
     optimizer = torch.optim.Adam(net.parameters(), args.lr)
-    for epoch in range(0, 100):
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_scheduler(args))
+    for epoch in range(1, args.max_epoch):
         train(train_loader, net, criterion, optimizer, epoch, args)
-        prec = validate(val_loader, model, criterion)
-
-        if epoch % 5 == 0 or prec < best_prec:
+        prec = validate(val_loader, net, criterion, epoch)
+        scheduler.step()
+        if prec < best_prec or epoch % 5 == 0:
             is_best = prec < best_prec
             best_prec = min(prec, best_prec)
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_prec': best_prec,
-                'optimizer': optimizer.state_dict(),
-            }, is_best, args.save, epoch)
+            save_checkpoint(net.state_dict(), optimizer.state_dict(), args.save_dir, epoch, is_best)
 
         # reset DALI iterators
         train_loader.reset()

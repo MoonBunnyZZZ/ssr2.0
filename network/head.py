@@ -35,6 +35,17 @@ class StageRegression(nn.Module):
         return delta, eta, p
 
 
+class FPN(nn.Module):
+    def __init__(self, base_chs):
+        super(FPN, self).__init__()
+        self.up_sample1 = nn.Sequential(nn.Conv2d(base_chs, base_chs // 2, 1),
+                                        nn.Upsample(scale_factor=2, mode='bilinear'))
+        self.up_sample2 = nn.Sequential(nn.Conv2d(base_chs // 2, base_chs // 4, 1),
+                                        nn.Upsample(scale_factor=2, mode='bilinear'))
+
+    def forward(self, x):
+
+
 if __name__ == '__main__':
     net = StageRegression(64, 32, 8)
     dummy1 = torch.rand(1, 64, 27, 27)
