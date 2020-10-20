@@ -38,16 +38,18 @@ class StageRegression(nn.Module):
 class FPN(nn.Module):
     def __init__(self, base_chs):
         super(FPN, self).__init__()
-        self.up_sample1 = nn.Sequential(nn.Conv2d(base_chs, base_chs // 2, 1),
-                                        nn.Upsample(scale_factor=2, mode='bilinear'))
-        self.up_sample2 = nn.Sequential(nn.Conv2d(base_chs // 2, base_chs // 4, 1),
-                                        nn.Upsample(scale_factor=2, mode='bilinear'))
+        self.up_sample_3to2 = nn.Sequential(nn.Conv2d(base_chs, base_chs // 2, 1),
+                                            nn.Upsample(scale_factor=2, mode='bilinear'))
+        self.up_sample_2to1 = nn.Sequential(nn.Conv2d(base_chs, base_chs // 4, 1),
+                                            nn.Upsample(scale_factor=2, mode='bilinear'))
 
     def forward(self, x):
+        x1, x2, x3 = x
 
+        upsampled_x3 = self.up_sample_3to2(x3)
+        new_x2 = torch.cat((x2, upsampled_x3), 1)
 
-if __name__ == '__main__':
-    net = StageRegression(64, 32, 8)
-    dummy1 = torch.rand(1, 64, 27, 27)
-    dummy2 = torch.rand(1, 32, 27, 27)
-    net(dummy1, dummy2)
+        upsampled_x2 = self.up_sample_2to1(new_x2)
+        new_x1 = torch.cat((x1, upsampled_x2), 1)
+
+        return [new_x1, new_x2, x3]

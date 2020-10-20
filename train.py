@@ -6,6 +6,7 @@ import torch
 from nvidia.dali.plugin.pytorch import DALIClassificationIterator
 
 from network.ssr import SSR
+from network.cfg import stream1_cfg, stream2_cfg
 from dataset.dali_pipe import TrainPipe, ValPipe
 from utils import AverageMeter, to_python_float
 
@@ -17,13 +18,15 @@ def cli():
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--threads-num', type=int)
     parser.add_argument('--gpu-id', type=int)
-    parser.add_argument('--gpus-num', type=int)
+    parser.add_argument('--gpu-num', type=int)
     parser.add_argument('--db-dir', type=str)
     parser.add_argument('--print-freq', type=int)
     parser.add_argument('--lr', type=float)
-    parser.add_argument('--warmup-num', type=int)
+    parser.add_argument('--warm-num', type=int)
     parser.add_argument('--lr-decay-milestone', type=str)
     parser.add_argument('--max-epoch', type=int)
+    parser.add_argument('--pretrained', default=None)
+    parser.add_argument('--fpn', action='store_true')
     parser.add_argument('--save-dir', type=str)
 
     arguments = parser.parse_args()
@@ -31,13 +34,13 @@ def cli():
 
 
 def lr_scheduler(args):
-    warmup_num = args.warmup_num
+    warm_num = args.warm_num
     lr_decay_milestone = list(map(lambda x: int(x), args.lr_decay_milestone.split(',')))
 
     def scheduler_func(epoch):
         ratio = 1.0
-        if epoch < warmup_num:
-            return (epoch+1) / warmup_num
+        if epoch < warm_num:
+            return (epoch+1) / warm_num
         else:
             for step in lr_decay_milestone:
                 if epoch > step:
@@ -55,19 +58,21 @@ def save_checkpoint(net_state, optimizer_state, save_dir, epoch, is_best=False):
 
 
 def get_dali_iterator(args):
-    train_pipe = TrainPipe(args.batch_size, args.threads_num, args.gpu_id, args.gpus_num, args.db_dir)
+    train_pipe = TrainPipe(args.batch_size, args.threads_num, args.gpu_id, args.gpu_num, args.db_dir)
     train_pipe.build()
     train_loader = DALIClassificationIterator([train_pipe], size=train_pipe.epoch_size("Reader"))
 
-    val_pipe = ValPipe(args.batch_size, args.threads_num, args.gpu_id, args.gpus_num, args.db_dir)
+    val_pipe = ValPipe(args.batch_size, args.threads_num, args.gpu_id, args.gpu_num, args.db_dir)
     val_pipe.build()
     val_loader = DALIClassificationIterator([val_pipe], size=train_pipe.epoch_size("Reader"))
 
     return train_loader, val_loader
 
 
-def get_net():
-    net = SSR()
+def get_net(args):
+    net = SSR(stream1_cfg, stream2_cfg, args.fpn)
+    if args.pretrained:
+        net.load_state_dict(torch.load(args.pretrained)['net_state'])
     net = net.cuda()
     return net
 
@@ -148,7 +153,7 @@ def main():
     args = cli()
     print(args)
     train_loader, val_loader = get_dali_iterator(args)
-    net = get_net()
+    net = get_net(args)
     criterion = torch.nn.L1Loss().cuda()
     optimizer = torch.optim.Adam(net.parameters(), args.lr)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_scheduler(args))
